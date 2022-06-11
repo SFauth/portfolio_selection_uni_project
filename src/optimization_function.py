@@ -4,15 +4,19 @@
 
 
 #%% Loading libraries
+from operator import concat
 from pickletools import optimize
+import os
+import glob
 import pandas as pd
 import numpy as np
+from functools import reduce
 from scipy.optimize import LinearConstraint
 from scipy.optimize import minimize
 
 #%% Function that reads in the data and computes daily returns in %
 
-def prep_data(path_to_file:str, time_period:int, drop=True):
+def prep_data_toy(path_to_file:str, time_period:int, drop=True):
 
     """
     Specify path to xlsx file that contains the data and
@@ -28,7 +32,57 @@ def prep_data(path_to_file:str, time_period:int, drop=True):
 
 
 
-#%% Read in 
+def prep_data(path_to_file:str, time_period:int, drop=True):
+
+    """
+    Specify path to xlsx file that contains the data and
+    specify time considered for returns. If drop = True,
+    all NaN cells are dropped. 
+    """
+
+    df = pd.read_excel(path_to_file)
+    
+    # Define date column (first column) to be the index 
+
+    df = df.rename(columns={df.columns[0]: "Date"}).set_index('Date')
+
+
+    # Kick out error columns
+
+    df = df[df.columns.drop(list(df.filter(regex="ERROR")))]
+
+    # Replace error strings with NaN 
+
+    df = df.replace(to_replace=r"[^A-Za-z0-9]+", value=np.NaN, regex=True)
+
+
+    return df.pct_change(time_period)
+
+
+
+
+
+#%% Read in actual data
+path = '../input/actual_data'
+datafiles_pattern = os.path.join(path, '*.xls') 
+file_list = glob.glob(datafiles_pattern)
+
+# Read in alls dfs
+
+returns_all_assets = [prep_data(file, time_period=1) for file in file_list]
+
+# Join the df list to one df 
+
+d_returns = pd.DataFrame()
+for region in range(len(returns_all_assets) - 1):
+    df = pd.concat([returns_all_assets[region], returns_all_assets[region+1]], axis=1)
+    d_returns = pd.concat([d_returns, df], axis=1)
+
+# Dropping duplicated cols 
+
+d_returns = d_returns.loc[:, ~d_returns.columns.duplicated()].copy()
+
+#%% Read in toy data
 
 d_returns = prep_data('../input/toy_data.xlsx', 1)
 
