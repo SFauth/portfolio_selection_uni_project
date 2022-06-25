@@ -63,13 +63,18 @@ def prep_data(path_to_file:str, time_period:int, drop=True):
 
 
 #%% Read in actual data
-path = '../input/actual_data'
+path = './input/actual_data'
 datafiles_pattern = os.path.join(path, '*.xls') 
 file_list = glob.glob(datafiles_pattern)
 
 # Read in alls dfs
 
 returns_all_assets = [prep_data(file, time_period=1) for file in file_list]
+
+#desired dimensions (sanity checks)
+
+print(max([asset.shape[0] for asset in returns_all_assets]))
+print(sum([asset.shape[1] for asset in returns_all_assets]))
 
 # Join the df list to one df 
 
@@ -84,7 +89,7 @@ d_returns = d_returns.loc[:, ~d_returns.columns.duplicated()].copy()
 
 #%% Read in toy data
 
-d_returns = prep_data('../input/toy_data.xlsx', 1)
+#d_returns = prep_data('../input/toy_data.xlsx', 1)
 
 
 # %% Create optimizer
@@ -125,4 +130,62 @@ def portfolio_selector(daily_returns: pd.DataFrame, lambda_=0):
     return optimized
 
 
-#%% Create function for 10 fold cross-validation
+#%% Create function to drop assets that containt a certain fraction of missing values
+
+def drop_high_na_assets(daily_returns:pd.DataFrame, fraction:float):
+    """
+    fraction: if a column has relatively more missings that this figure, it gets dropped
+    """
+
+    cleaned_df = daily_returns.loc[:, daily_returns.isin([' ','NULL', np.NaN]).mean() < fraction]
+    return cleaned_df.dropna()
+
+
+
+#%% Apply drop function to end up with ~ 1400 samples
+
+cleaned_returns = drop_high_na_assets(d_returns, 0.8464)
+
+#%% Create summary stats for data presentation table and text 
+
+# Mean return in %
+cleaned_returns.describe().loc["mean"].mean() * 100
+# Mean std. dev in %
+cleaned_returns.describe().loc["std"].mean() * 100
+# Skewness in %
+cleaned_returns.skew().mean() 
+# Kurtosis in %
+cleaned_returns.kurtosis().mean() 
+
+
+#%% Create a function to compute the performance measures of the portfolio
+
+def eval_selector(daily_returns:pd.DataFrame):
+
+    # Create training subset
+
+    # fuers erste sind 250 weg. dann immer 21
+
+    n_windows = int((daily_returns.shape[0] - 250) / 21)
+
+    for window in n_windows:
+        training_data = daily_returns.iloc[21*window:21*window+250]
+        
+        test_data = daily_returns.iloc[21*window+250+1:21*window+250+21+1]
+
+        weights = portfolio_selector(training_data)
+        
+        # calculate VaR and Sharpe ratio for all optimal porfolios (55), yielding 55 estimates
+
+    return avg_VaR, avg_sharpe
+
+
+
+
+#%% Create function for cross-validation
+
+def cv_sample_size_lambda(daily_returns:pd.DataFrame, n_folds:int):
+    """
+    Function that uses cross-validation to find the optimal regularization strength.
+    """
+
