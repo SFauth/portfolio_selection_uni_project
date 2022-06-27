@@ -13,6 +13,7 @@ import numpy as np
 from functools import reduce
 from scipy.optimize import LinearConstraint
 from scipy.optimize import minimize
+import matplotlib.pyplot as plt
 
 #%% Function that reads in the data and computes daily returns in %
 
@@ -91,6 +92,22 @@ d_returns = d_returns.loc[:, ~d_returns.columns.duplicated()].copy()
 
 #d_returns = prep_data('../input/toy_data.xlsx', 1)
 
+# Get weight vector.
+# buy assets according to weights 
+# 10 % Samsung, 90 % SK hynix
+# compute return distribution of this portfolio: (cont. returns?)
+# we take discrete returns as they have the advantage that we can
+# compute the portfolio"s total return as a weighted sum 
+# of the individual returns (we dont care about longer periods,
+# as we care about daily returns) (CITE FINANZMARKSTATISTIK)
+# 0.1 * samsung return + 0.9 * SK hynix return day 1 
+# 0.1 * samsung return + 0.9 * SK hynix return day 2 
+# ...
+# 21 daily returns of this portfolio form the distribution 
+# extract VaR, Sharpe ratio
+
+
+
 
 # %% Create optimizer
 
@@ -149,43 +166,89 @@ cleaned_returns = drop_high_na_assets(d_returns, 0.8464)
 #%% Create summary stats for data presentation table and text 
 
 # Mean return in %
-cleaned_returns.describe().loc["mean"].mean() * 100
+cleaned_returns.describe().loc["mean"].mean() 
 # Mean std. dev in %
-cleaned_returns.describe().loc["std"].mean() * 100
+cleaned_returns.describe().loc["std"].mean()
 # Skewness in %
 cleaned_returns.skew().mean() 
 # Kurtosis in %
 cleaned_returns.kurtosis().mean() 
 
 
+#%% Plot function to be optimized 
+# Vector function: a vector goes in and a scalar comes out 
+# can not plot it 
+
+
+
 #%% Create a function to compute the performance measures of the portfolio
 
-def eval_selector(daily_returns:pd.DataFrame):
-
+def eval_selector(daily_returns:pd.DataFrame, VaR_per=0.1, reg_strength=0):
+    """
+    Give in daily returns and percentage to calculate VaR.
+    Default 10%
+    Specify Lasso regularization strength (Default: 0)
+    """
     # Create training subset
 
     # fuers erste sind 250 weg. dann immer 21
 
     n_windows = int((daily_returns.shape[0] - 250) / 21)
 
-    for window in n_windows:
+    SharpeRatios = []
+    VaRs = []
+    shorting_frac = []
+    active_frac = [] 
+
+    for window in range(n_windows):
         training_data = daily_returns.iloc[21*window:21*window+250]
         
         test_data = daily_returns.iloc[21*window+250+1:21*window+250+21+1]
 
-        weights = portfolio_selector(training_data)
+        # Try out different lambdas 
+
         
+
+        weights_obj = portfolio_selector(training_data, lambda_=  reg_strength)
+
+        weights = weights_obj.x 
+
+        returns = sorted(test_data @ weights)
+
+        test_size = test_data.shape[0]
+
+        shorting_frac.append((weights < 0 ).sum() / weights.shape[0])
+
+        active_frac.append(((weights != 0 ).sum()) / weights.shape[0])
+
+        VaRs.append(returns[int(test_size * VaR_per)])
+        
+        SharpeRatios.append(pd.Series(returns).mean() / pd.Series(returns).std())
+
         # calculate VaR and Sharpe ratio for all optimal porfolios (55), yielding 55 estimates
 
-    return avg_VaR, avg_sharpe
+    return VaRs, SharpeRatios, shorting_frac, active_frac
 
 
 
 
 #%% Create function for cross-validation
+# Should we shuffle the data ? 
 
 def cv_sample_size_lambda(daily_returns:pd.DataFrame, n_folds:int):
     """
     Function that uses cross-validation to find the optimal regularization strength.
     """
+    fold_size = int(daily_returns.shape[0] / n_folds)
 
+    for fold in range(len(n_folds)):
+
+        test_data = daily_returns[fold * fold_size: (fold+1) * fold_size]
+        
+        # Get indices and exclude them from daily returns to get training data
+
+        test_indices = test_data.index
+
+        training_data = daily_returns.drop([test_indices], axis=0)
+
+    
