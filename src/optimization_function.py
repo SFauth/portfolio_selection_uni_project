@@ -1,6 +1,5 @@
 # Topic idea for South East Asian (maybe African, Indian, Pakistani) data
 # does LASSO beat the naive optimization? 
-# more advanced: does the non-convex optimizers also beat LASSO?
 
 
 #%% Loading libraries
@@ -13,7 +12,10 @@ import numpy as np
 from functools import reduce
 from scipy.optimize import LinearConstraint
 from scipy.optimize import minimize
+from multiprocessing import Pool 
 import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
 
 #%% Function that reads in the data and computes daily returns in %
 
@@ -56,7 +58,7 @@ def prep_data(path_to_file:str, time_period:int, drop=True):
 
     df = df.replace(to_replace=r"[^A-Za-z0-9]+", value=np.NaN, regex=True)
 
-
+    # pd.pct_change is not measured in %, it is just a decimal number
     return df.pct_change(time_period)
 
 
@@ -147,6 +149,7 @@ def portfolio_selector(daily_returns: pd.DataFrame, lambda_=0):
     return optimized
 
 
+
 #%% Create function to drop assets that containt a certain fraction of missing values
 
 def drop_high_na_assets(daily_returns:pd.DataFrame, fraction:float):
@@ -161,7 +164,9 @@ def drop_high_na_assets(daily_returns:pd.DataFrame, fraction:float):
 
 #%% Apply drop function to end up with ~ 1400 samples
 
-cleaned_returns = drop_high_na_assets(d_returns, 0.8464)
+# Run with shuffled data
+cleaned_returns = drop_high_na_assets(d_returns, 0.8464).sample(frac=1, random_state=626)
+
 
 #%% Create summary stats for data presentation table and text 
 
@@ -175,13 +180,70 @@ cleaned_returns.skew().mean()
 cleaned_returns.kurtosis().mean() 
 
 
+
+
+
+lambdas = [0, 0.1, 0.2 ,0.3, 0.4 , 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+SRs = {}
+shorting_frac = {}
+active_frac = {}
+VaRs = {}
+
+
+for reg_strength in lambdas:
+
+    print(reg_strength)
+    reg_weights = portfolio_selector(cleaned_returns.iloc[0:943], lambda_=reg_strength)
+    reg_weights = reg_weights.x
+    reg_returns = sorted(cleaned_returns.iloc[944:1179] @ reg_weights)
+
+    SRs[str(reg_strength)] = pd.Series(reg_returns).mean() / pd.Series(reg_returns).std()
+    
+    shorting_frac[str(reg_strength)] = ((reg_weights < 0 ).sum() / reg_weights.shape[0])
+
+    active_frac[str(reg_strength)] = (((reg_weights != 0 ).sum()) / reg_weights.shape[0])
+
+    VaRs[str(reg_strength)] = (reg_returns[int(cleaned_returns.iloc[944:1179].shape[0] * 0.1)])
+
+
+dicts = [VaRs, SRs, active_frac, shorting_frac]
+
+metrics = []
+
+for metric in dicts:
+    metrics.append(pd.Series(metric, index=metric.keys()))
+
+
+
+
+
+metrics = (pd.DataFrame(metrics).T)
+metrics = ['VaR_10', "SR", 'Active fraction', 'Short fraction']
+
+
+
+scatter = px.scatter(metrics.drop('Active fraction', axis=1), title='Results')
+lines = px.line(metrics.drop('Active fraction', axis=1), title='Results')
+scatter_line = go.Figure(scatter.data+ lines.data,
+layout=go.Layout(
+        title=go.layout.Title(text="Performance metrics of different regularization strengths"),
+        xaxis_title="Regularization strength",
+        yaxis_title='Metric',
+        legend_title= 'Metrics'))
+
+scatter_line.write_image("results.png")
+
+
+# RELEVANT TILL HERE, REST WERE MY CROSS VALIDATION APPORACHES THAT WERE TOO COMPLEX
+
+
 #%% Plot function to be optimized 
 # Vector function: a vector goes in and a scalar comes out 
 # can not plot it 
-
-
-
-#%% Create a function to compute the performance measures of the portfolio
+# solution: just take less assets and increase time window
+# include country column in initial dataset to see what countries are 
+# part of the final dataset
+# dim reduction?
 
 def eval_selector(daily_returns:pd.DataFrame, VaR_per=0.1, reg_strength=0):
     """
@@ -201,6 +263,9 @@ def eval_selector(daily_returns:pd.DataFrame, VaR_per=0.1, reg_strength=0):
     active_frac = [] 
 
     for window in range(n_windows):
+
+        print(window)
+
         training_data = daily_returns.iloc[21*window:21*window+250]
         
         test_data = daily_returns.iloc[21*window+250+1:21*window+250+21+1]
@@ -228,6 +293,67 @@ def eval_selector(daily_returns:pd.DataFrame, VaR_per=0.1, reg_strength=0):
         # calculate VaR and Sharpe ratio for all optimal porfolios (55), yielding 55 estimates
 
     return VaRs, SharpeRatios, shorting_frac, active_frac
+
+#%% Create benchmark with no regularization 10:35 Uhr start
+# 45 min for one iteration
+
+p = Pool(4)
+
+VaR_b, SR_b, sf_b, af_b = p.map(eval_selector(cleaned_returns))
+
+#%% Create a function to compute the performance measures of the portfolio
+
+def eval_selector_cv(daily_returns:pd.DataFrame, VaR_per=0.1, reg_strength=0):
+    """
+    Give in daily returns and percentage to calculate VaR.
+    Default 10%
+    Specify Lasso regularization strength (Default: 0)
+    """
+    # Create training subset
+
+    # fuers erste sind 250 weg. dann immer 21
+
+    n_windows = int((daily_returns.shape[0] - 250) / 21)
+
+    SharpeRatiosCV = {}
+    SharpeRatios = []
+    VaRs = []
+    shorting_frac = []
+    active_frac = [] 
+
+    for window in range(n_windows):
+        training_data = daily_returns.iloc[21*window:21*window+250]
+        
+        test_data = daily_returns.iloc[21*window+250+1:21*window+250+21+1]
+
+        # Train with every lambda. Calculate test Sharpe ratio
+
+        lambda_grid = np.linspace(0, 1, 30)
+
+        for reg_strength in lambda_grid:
+
+            weights_obj = portfolio_selector(training_data, lambda_=  reg_strength)
+
+            weights = weights_obj.x 
+
+            returns = sorted(test_data @ weights)
+
+            test_size = test_data.shape[0]
+
+            SharpeRatiosCV[str(reg_strength)+str(window)] = pd.Series(returns).mean() / pd.Series(returns).std()
+
+        # Take with average highest Sharpe ratio to do CV 
+
+        shorting_frac.append((weights < 0 ).sum() / weights.shape[0])
+
+        active_frac.append(((weights != 0 ).sum()) / weights.shape[0])
+
+        VaRs.append(returns[int(test_size * VaR_per)])
+        
+
+        # calculate VaR and Sharpe ratio for all optimal porfolios (55), yielding 55 estimates
+
+    return VaRs, SharpeRatios, SharpeRatiosCV, shorting_frac, active_frac
 
 
 
